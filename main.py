@@ -69,6 +69,10 @@ def init_db():
 
 init_db()
 
+@app.get("/")
+def root():
+    return {"message": "Bestie AI è online 💛 Vai su /docs per usare le API."}
+
 # ---------------- HELPERS ----------------
 
 def hash_password(password: str) -> str:
@@ -249,3 +253,4 @@ def chat(req: ChatRequest, user_id: int = Depends(get_current_user)):
     conversation_cache[user_id].append({"role": "assistant", "content": reply})
 
     return ChatResponse(reply=reply, emotion=emotion)
+
