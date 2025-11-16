@@ -4,7 +4,7 @@ import hashlib
 import jwt
 import random
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -69,6 +69,7 @@ def init_db():
 
 init_db()
 
+# ---------------- ROOT ROUTE ----------------
 @app.get("/")
 def root():
     return {"message": "Bestie AI è online 💛 Vai su /docs per usare le API."}
@@ -91,15 +92,20 @@ def decode_jwt(token: str):
     except:
         return None
 
-def get_current_user(token: str = Depends(lambda token: token)):
-    if not token:
-        raise HTTPException(status_code=401, detail="Token mancante")
+def get_current_user(authorization: str = Header(None)):
+    """
+    Legge il token dall'header Authorization: Bearer <token>
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Token mancante o formato non valido")
+
+    token = authorization.split(" ", 1)[1]  # tutto dopo "Bearer "
     data = decode_jwt(token)
     if not data:
         raise HTTPException(status_code=401, detail="Token non valido")
     return data["user_id"]
 
-def detect_emotion(text):
+def detect_emotion(text: str):
     prompt = (
         "Dimmi SOLO quale emozione rappresenta questo messaggio: triste, ansioso, arrabbiato, "
         "stanco, felice, solo, confuso, paura, stressato, neutro.\n"
@@ -113,7 +119,7 @@ def detect_emotion(text):
 
     return result.choices[0].message.content.strip().lower()
 
-def dangerous(text):
+def dangerous(text: str):
     words = ["suicidio", "ammazzarmi", "uccidermi", "farmi del male", "non voglio vivere", "morire"]
     return any(w in text.lower() for w in words)
 
@@ -208,13 +214,17 @@ def chat(req: ChatRequest, user_id: int = Depends(get_current_user)):
     emotion = detect_emotion(msg)
 
     conn = db()
-    conn.execute("INSERT INTO emotions (user_id, emotion, timestamp) VALUES (?, ?, ?)",
-                 (user_id, emotion, datetime.utcnow().isoformat()))
+    conn.execute(
+        "INSERT INTO emotions (user_id, emotion, timestamp) VALUES (?, ?, ?)",
+        (user_id, emotion, datetime.utcnow().isoformat())
+    )
     conn.commit()
 
     # MEMORY LONG TERM
-    conn.execute("INSERT INTO memory (user_id, content, timestamp) VALUES (?, ?, ?)",
-                 (user_id, msg, datetime.utcnow().isoformat()))
+    conn.execute(
+        "INSERT INTO memory (user_id, content, timestamp) VALUES (?, ?, ?)",
+        (user_id, msg, datetime.utcnow().isoformat())
+    )
     conn.commit()
 
     # MEMORY SHORT TERM
@@ -253,4 +263,3 @@ def chat(req: ChatRequest, user_id: int = Depends(get_current_user)):
     conversation_cache[user_id].append({"role": "assistant", "content": reply})
 
     return ChatResponse(reply=reply, emotion=emotion)
-
