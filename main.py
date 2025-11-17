@@ -52,7 +52,7 @@ def detect_emotion(text: str) -> str:
     )
 
     result = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4.1",
         messages=[{"role": "user", "content": prompt}]
     )
 
@@ -134,3 +134,4 @@ def chat(req: ChatRequest):
 @app.post("/chat_free", response_model=ChatResponse)
 def chat_free(req: ChatRequest):
     return build_reply(req.message)
+
