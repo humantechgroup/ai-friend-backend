@@ -99,7 +99,7 @@ def get_current_user(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token mancante o formato non valido")
 
-    token = authorization.split(" ", 1)[1]  # tutto dopo "Bearer "
+    token = authorization.split(" ", 1)[1]
     data = decode_jwt(token)
     if not data:
         raise HTTPException(status_code=401, detail="Token non valido")
@@ -120,7 +120,7 @@ def detect_emotion(text: str):
     return result.choices[0].message.content.strip().lower()
 
 def dangerous(text: str):
-    words = ["suicidio", "ammazzarmi", "uccidermi", "farmi del male", "non voglio vivere", "morire"]
+    words = ["suicidio", "ammazzarmi", "uccidermi", "farmi del male", "non voglio vivere", "morire", "togliermi la vita"]
     return any(w in text.lower() for w in words)
 
 
@@ -175,7 +175,8 @@ def login(user: Login):
 
 # ---------------- AI “MIGLIORE AMICO” ----------------
 
-conversation_cache = {}  # user_id → conversazione breve
+conversation_cache = {}      # user_id → conversazione breve (loggati)
+guest_conversation = []      # conversazione ospite (un solo utente "guest")
 
 suggestions = {
     "triste": "Prova a fare un respiro e rallentare un attimo. Ci sono qui.",
@@ -191,8 +192,36 @@ motivation = [
     "Un passo alla volta va benissimo.",
     "Hai più forza di quanto pensi.",
     "Meriti calma e spazio.",
-    "Va bene chiedere aiuto."
+    "Va bene chiedere aiuto.",
 ]
+
+def build_ai_reply(messages, emotion: str):
+    system_prompt = (
+        "Tu sei un migliore amico virtuale. Sei naturale, umano, dolce e empatico. "
+        "Parli in modo semplice, spontaneo e affettuoso. "
+        "Non sembri un robot. Rispondi con calore, gentilezza, vicinanza. "
+        "Non giudichi mai. Ascolti davvero. Non dai diagnosi."
+    )
+
+    full_messages = [{"role": "system", "content": system_prompt}] + messages
+
+    result = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=full_messages
+    )
+
+    reply = result.choices[0].message.content
+
+    if emotion in suggestions:
+        reply += "\n\n✨ " + suggestions[emotion]
+
+    if emotion in ["triste", "ansioso", "stressato", "solo", "paura", "arrabbiato", "confuso"]:
+        reply += "\n\n💛 " + random.choice(motivation)
+
+    return reply
+
+
+# --------- CHAT LOGGATA (USA JWT) ---------
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, user_id: int = Depends(get_current_user)):
@@ -203,7 +232,7 @@ def chat(req: ChatRequest, user_id: int = Depends(get_current_user)):
     if dangerous(msg):
         return ChatResponse(
             reply=(
-                "Mi dispiace tantissimo che tu ti senti così. ❤️\n"
+                "Mi dispiace tantissimo che tu ti senta così. ❤️\n"
                 "Per favore parla con una persona reale ora: un amico, un familiare, "
                 "o i servizi di emergenza. La tua vita conta, davvero."
             ),
@@ -220,46 +249,52 @@ def chat(req: ChatRequest, user_id: int = Depends(get_current_user)):
     )
     conn.commit()
 
-    # MEMORY LONG TERM
     conn.execute(
         "INSERT INTO memory (user_id, content, timestamp) VALUES (?, ?, ?)",
         (user_id, msg, datetime.utcnow().isoformat())
     )
     conn.commit()
 
-    # MEMORY SHORT TERM
+    # SHORT MEMORY PER UTENTE
     if user_id not in conversation_cache:
         conversation_cache[user_id] = []
     conversation_cache[user_id].append({"role": "user", "content": msg})
     if len(conversation_cache[user_id]) > 15:
         conversation_cache[user_id].pop(0)
 
-    # AI PERSONALITY
-    system_prompt = (
-        "Tu sei un migliore amico virtuale. Sei naturale, umano, dolce e empatico. "
-        "Parli in modo semplice, spontaneo e affettuoso. "
-        "Non sembri un robot. Rispondi con calore, gentilezza, vicinanza. "
-        "Non giudichi mai. Ascolti davvero. Non dai diagnosi."
-    )
+    reply = build_ai_reply(conversation_cache[user_id], emotion)
 
-    messages = [{"role": "system", "content": system_prompt}] + conversation_cache[user_id]
-
-    result = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages
-    )
-
-    reply = result.choices[0].message.content
-
-    # SUGGESTION
-    if emotion in suggestions:
-        reply += "\n\n✨ " + suggestions[emotion]
-
-    # MOTIVATION
-    if emotion in ["triste", "ansioso", "stressato", "solo", "paura", "arrabbiato"]:
-        reply += "\n\n💛 " + random.choice(motivation)
-
-    # SAVE AI REPLY
     conversation_cache[user_id].append({"role": "assistant", "content": reply})
+
+    return ChatResponse(reply=reply, emotion=emotion)
+
+
+# --------- CHAT OSPITE (SENZA LOGIN, SENZA DB) ---------
+
+@app.post("/chat_guest", response_model=ChatResponse)
+def chat_guest(req: ChatRequest):
+
+    msg = req.message
+
+    if dangerous(msg):
+        return ChatResponse(
+            reply=(
+                "Mi dispiace tantissimo che tu ti senta così. ❤️\n"
+                "Anche se io sono solo un'AI, ti incoraggio davvero a parlare "
+                "con una persona reale: un amico, un familiare o i servizi di emergenza. "
+                "La tua vita conta moltissimo."
+            ),
+            emotion="critico"
+        )
+
+    emotion = detect_emotion(msg)
+
+    guest_conversation.append({"role": "user", "content": msg})
+    if len(guest_conversation) > 20:
+        guest_conversation.pop(0)
+
+    reply = build_ai_reply(guest_conversation, emotion)
+
+    guest_conversation.append({"role": "assistant", "content": reply})
 
     return ChatResponse(reply=reply, emotion=emotion)
