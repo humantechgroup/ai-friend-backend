@@ -53,7 +53,7 @@ def detect_emotion(text: str) -> str:
 
     result = client.chat.completions.create(
         result = client.chat.completions.create(
-    model="gpt-4.1-mini",
+    model="gpt-4o-mini",
     messages=messages
 )
 
