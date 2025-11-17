@@ -12,10 +12,10 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = FastAPI()
 
-# CORS per permettere richieste da Netlify, file locale, ecc.
+# CORS aperto (Netlify, locale, ecc.)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],       # accetta richieste da ovunque
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -28,8 +28,8 @@ class ChatResponse(BaseModel):
     reply: str
     emotion: str
 
-# --------- MEMORIA CONVERSAZIONE (UN SOLO UTENTE / SESSIONE) ---------
-conversation_history = []
+# --------- MEMORIA CONVERSAZIONE ---------
+conversation_history = []  # unica conversazione "globale"
 
 # --------- ROOT ---------
 @app.get("/")
@@ -52,11 +52,7 @@ def detect_emotion(text: str) -> str:
     )
 
     result = client.chat.completions.create(
-        result = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=messages
-)
-
+        model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}]
     )
 
@@ -94,17 +90,22 @@ def build_reply(message: str) -> ChatResponse:
     # Emozione
     emotion = detect_emotion(message)
 
-    # Memoria breve
+    # Memoria breve della conversazione
     conversation_history.append({"role": "user", "content": message})
-    if len(conversation_history) > 20:
+    if len(conversation_history) > 40:
         conversation_history.pop(0)
 
     # Personalità
     system_prompt = (
-        "Tu sei un migliore amico virtuale. Sei naturale, umano, dolce e empatico. "
-        "Parli in modo semplice, spontaneo e affettuoso. "
-        "Non sembri un robot. Rispondi con calore, gentilezza, vicinanza. "
-        "Non giudichi mai. Ascolti davvero. Non dai diagnosi mediche."
+        "Tu sei Bestie AI, un migliore amico virtuale dolce, calmo ed empatico. "
+        "Prima di rispondere, fermati un attimo a capire davvero come si sente la persona, "
+        "cosa sta chiedendo e cosa potrebbe esserci sotto alla superficie.\n\n"
+        "Parli in modo semplice, umano e spontaneo, come una persona vera, non come un robot. "
+        "Fai domande gentili per capire meglio, aiuti a mettere ordine nei pensieri, "
+        "e proponi piccole idee concrete (respiri, pause, attività leggere, parlare con qualcuno di fiducia…).\n\n"
+        "Non giudichi mai, non minimizzi il dolore. Non fai diagnosi mediche o psicologiche, "
+        "non consigli farmaci. Se percepisci contenuti legati a suicidio o autolesionismo, "
+        "incoraggia con delicatezza a cercare subito aiuto reale (amici, famiglia, servizi di emergenza)."
     )
 
     messages = [{"role": "system", "content": system_prompt}] + conversation_history
@@ -116,25 +117,25 @@ def build_reply(message: str) -> ChatResponse:
 
     reply_text = result.choices[0].message.content
 
-    # Suggerimento
+    # Suggerimento extra
     if emotion in suggestions:
         reply_text += "\n\n✨ " + suggestions[emotion]
 
-    # Motivazione
+    # Motivazione extra
     if emotion in ["triste", "ansioso", "stressato", "solo", "paura", "arrabbiato", "confuso"]:
         reply_text += "\n\n💛 " + random.choice(motivation)
 
-    # Salva risposta
+    # Salva risposta in memoria
     conversation_history.append({"role": "assistant", "content": reply_text})
 
     return ChatResponse(reply=reply_text, emotion=emotion)
 
-# --------- ENDPOINT CHAT (principale) ---------
+# --------- ENDPOINT CHAT ---------
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
     return build_reply(req.message)
 
-# --------- ENDPOINT CHAT_FREE (alias, stessa cosa) ---------
+# Alias /chat_free (stessa cosa)
 @app.post("/chat_free", response_model=ChatResponse)
 def chat_free(req: ChatRequest):
     return build_reply(req.message)
