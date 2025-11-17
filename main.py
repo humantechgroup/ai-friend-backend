@@ -14,7 +14,7 @@ from openai import OpenAI
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# JWT secret key
+# JWT secret key (usata solo per /chat loggato)
 JWT_SECRET = "SUPER_SECRET_KEY_CHANGE_THIS"
 JWT_ALGORITHM = "HS256"
 
@@ -94,7 +94,7 @@ def decode_jwt(token: str):
 
 def get_current_user(authorization: str = Header(None)):
     """
-    Legge il token dall'header Authorization: Bearer <token>
+    Legge il token dall'header Authorization: Bearer <token> per /chat loggato.
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token mancante o formato non valido")
@@ -120,7 +120,10 @@ def detect_emotion(text: str):
     return result.choices[0].message.content.strip().lower()
 
 def dangerous(text: str):
-    words = ["suicidio", "ammazzarmi", "uccidermi", "farmi del male", "non voglio vivere", "morire", "togliermi la vita"]
+    words = [
+        "suicidio", "ammazzarmi", "uccidermi", "farmi del male",
+        "non voglio vivere", "morire", "togliermi la vita"
+    ]
     return any(w in text.lower() for w in words)
 
 
@@ -175,8 +178,7 @@ def login(user: Login):
 
 # ---------------- AI “MIGLIORE AMICO” ----------------
 
-conversation_cache = {}      # user_id → conversazione breve (loggati)
-guest_conversation = []      # conversazione ospite (un solo utente "guest")
+conversation_cache = {}  # può contenere chiavi: user_id (loggati) e "guest"
 
 suggestions = {
     "triste": "Prova a fare un respiro e rallentare un attimo. Ci sono qui.",
@@ -195,7 +197,7 @@ motivation = [
     "Va bene chiedere aiuto.",
 ]
 
-def build_ai_reply(messages, emotion: str):
+def build_ai_reply(history, emotion: str):
     system_prompt = (
         "Tu sei un migliore amico virtuale. Sei naturale, umano, dolce e empatico. "
         "Parli in modo semplice, spontaneo e affettuoso. "
@@ -203,11 +205,11 @@ def build_ai_reply(messages, emotion: str):
         "Non giudichi mai. Ascolti davvero. Non dai diagnosi."
     )
 
-    full_messages = [{"role": "system", "content": system_prompt}] + messages
+    messages = [{"role": "system", "content": system_prompt}] + history
 
     result = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=full_messages
+        messages=messages
     )
 
     reply = result.choices[0].message.content
@@ -221,14 +223,13 @@ def build_ai_reply(messages, emotion: str):
     return reply
 
 
-# --------- CHAT LOGGATA (USA JWT) ---------
+# --------- CHAT LOGGATA (USA JWT + DB) ---------
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, user_id: int = Depends(get_current_user)):
 
     msg = req.message
 
-    # SAFETY
     if dangerous(msg):
         return ChatResponse(
             reply=(
@@ -239,7 +240,6 @@ def chat(req: ChatRequest, user_id: int = Depends(get_current_user)):
             emotion="critico"
         )
 
-    # EMOTION
     emotion = detect_emotion(msg)
 
     conn = db()
@@ -255,7 +255,6 @@ def chat(req: ChatRequest, user_id: int = Depends(get_current_user)):
     )
     conn.commit()
 
-    # SHORT MEMORY PER UTENTE
     if user_id not in conversation_cache:
         conversation_cache[user_id] = []
     conversation_cache[user_id].append({"role": "user", "content": msg})
@@ -269,10 +268,10 @@ def chat(req: ChatRequest, user_id: int = Depends(get_current_user)):
     return ChatResponse(reply=reply, emotion=emotion)
 
 
-# --------- CHAT OSPITE (SENZA LOGIN, SENZA DB) ---------
+# --------- CHAT OSPITE (NESSUN LOGIN, NESSUN DB) ---------
 
-@app.post("/chat_guest", response_model=ChatResponse)
-def chat_guest(req: ChatRequest):
+@app.post("/chat_free", response_model=ChatResponse)
+def chat_free(req: ChatRequest):
 
     msg = req.message
 
@@ -289,12 +288,15 @@ def chat_guest(req: ChatRequest):
 
     emotion = detect_emotion(msg)
 
-    guest_conversation.append({"role": "user", "content": msg})
-    if len(guest_conversation) > 20:
-        guest_conversation.pop(0)
+    key = "guest"
+    if key not in conversation_cache:
+        conversation_cache[key] = []
+    conversation_cache[key].append({"role": "user", "content": msg})
+    if len(conversation_cache[key]) > 20:
+        conversation_cache[key].pop(0)
 
-    reply = build_ai_reply(guest_conversation, emotion)
+    reply = build_ai_reply(conversation_cache[key], emotion)
 
-    guest_conversation.append({"role": "assistant", "content": reply})
+    conversation_cache[key].append({"role": "assistant", "content": reply})
 
     return ChatResponse(reply=reply, emotion=emotion)
